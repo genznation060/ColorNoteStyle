@@ -1,90 +1,28 @@
 package com.example.colornoteclone;
 
-import android.app.*;
-import android.os.Bundle;
-import android.content.*;
-import android.graphics.Color;
-import android.view.*;
-import android.widget.*;
-import androidx.recyclerview.widget.*;
-import org.json.*;
-import java.util.*;
+import android.app.*;import android.os.*;import android.content.*;import android.net.Uri;import android.util.Base64;import android.view.*;import android.widget.*;import androidx.recyclerview.widget.*;import org.json.*;import java.io.*;import java.nio.charset.StandardCharsets;import java.security.*;import java.util.*;import javax.crypto.*;import javax.crypto.spec.*;import android.security.keystore.*;
 
-public class MainActivity extends Activity {
-    ArrayList<Note> notes = new ArrayList<>();
-    NoteAdapter adapter;
-    android.content.SharedPreferences prefs;
-
-    @Override public void onCreate(Bundle b) {
-        super.onCreate(b);
-        setContentView(R.layout.activity_main);
-        prefs = getSharedPreferences("notes", MODE_PRIVATE);
-        load();
-        RecyclerView list = findViewById(R.id.list);
-        list.setLayoutManager(new LinearLayoutManager(this));
-        adapter = new NoteAdapter();
-        list.setAdapter(adapter);
-
-        EditText search = findViewById(R.id.search);
-        search.addTextChangedListener(new android.text.TextWatcher() {
-            public void beforeTextChanged(CharSequence s,int a,int c,int d){}
-            public void onTextChanged(CharSequence s,int a,int b,int c){ adapter.filter(s.toString()); }
-            public void afterTextChanged(android.text.Editable e){}
-        });
-        findViewById(R.id.add).setOnClickListener(v -> editor(null));
-        updateCount();
-    }
-
-    void editor(Note existing) {
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(24, 4, 24, 4);
-        EditText title = new EditText(this); title.setHint("Title");
-        EditText body = new EditText(this); body.setHint("Write your note..."); body.setMinLines(6);
-        box.addView(title); box.addView(body);
-        if(existing != null){ title.setText(existing.title); body.setText(existing.body); }
-        new AlertDialog.Builder(this).setTitle(existing==null?"New note":"Edit note")
-            .setView(box).setPositiveButton("Save",(d,w)->{
-                if(existing==null) notes.add(new Note(title.getText().toString(),body.getText().toString()));
-                else { existing.title=title.getText().toString(); existing.body=body.getText().toString(); }
-                save(); adapter.notifyDataSetChanged(); updateCount();
-            }).setNegativeButton("Cancel",null).show();
-    }
-
-    void delete(Note n){
-        new AlertDialog.Builder(this).setTitle("Delete note?").setMessage(n.title)
-            .setPositiveButton("Delete",(d,w)->{notes.remove(n);save();adapter.notifyDataSetChanged();updateCount();})
-            .setNegativeButton("Cancel",null).show();
-    }
-
-    void updateCount(){ ((TextView)findViewById(R.id.count)).setText(notes.size()+" notes"); }
-
-    void save(){
-        JSONArray a=new JSONArray();
-        try { for(Note n:notes){JSONObject o=new JSONObject();o.put("title",n.title);o.put("body",n.body);a.put(o);}
-        }catch(Exception ignored){}
-        prefs.edit().putString("data",a.toString()).apply();
-    }
-    void load(){
-        String s=prefs.getString("data","[]");
-        try{JSONArray a=new JSONArray(s);for(int i=0;i<a.length();i++){JSONObject o=a.getJSONObject(i);notes.add(new Note(o.optString("title"),o.optString("body")));}}catch(Exception ignored){}
-    }
-
-    class Note { String title,body; Note(String t,String b){title=t;body=b;} }
-
-    class NoteAdapter extends RecyclerView.Adapter<NoteVH>{
-        ArrayList<Note> shown=new ArrayList<>(notes);
-        void filter(String q){shown.clear();q=q.toLowerCase();for(Note n:notes)if((n.title+" "+n.body).toLowerCase().contains(q))shown.add(n);notifyDataSetChanged();}
-        public NoteVH onCreateViewHolder(android.view.ViewGroup p,int v){
-            TextView t=new TextView(MainActivity.this);t.setPadding(18,18,18,18);t.setTextSize(16);return new NoteVH(t);
-        }
-        public void onBindViewHolder(NoteVH h,int pos){
-            Note n=shown.get(pos);h.t.setText((n.title.isEmpty()?"Untitled":n.title)+"\n"+n.body);
-            h.t.setBackgroundColor(Color.rgb(255,249,196));
-            h.t.setOnClickListener(v->editor(n));
-            h.t.setOnLongClickListener(v->{delete(n);return true;});
-        }
-        public int getItemCount(){return shown.size();}
-    }
-    class NoteVH extends RecyclerView.ViewHolder { TextView t; NoteVH(View v){super(v);t=(TextView)v;} }
+public class MainActivity extends Activity{
+ static final String PREF="notes",DATA="encrypted_data",ALIAS="MyNotesLocalKey"; static final int CREATE=101,OPEN=102; final ArrayList<Note> notes=new ArrayList<>(); SharedPreferences prefs; NoteAdapter adapter; String pendingBackup;
+ public void onCreate(Bundle b){super.onCreate(b);setContentView(R.layout.activity_main);prefs=getSharedPreferences(PREF,0);loadLocal();RecyclerView list=findViewById(R.id.list);list.setLayoutManager(new LinearLayoutManager(this));adapter=new NoteAdapter();list.setAdapter(adapter);EditText s=findViewById(R.id.search);s.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence x,int a,int c,int d){}public void onTextChanged(CharSequence x,int a,int b,int c){adapter.filter(x.toString());}public void afterTextChanged(android.text.Editable x){}});findViewById(R.id.add).setOnClickListener(v->edit(null));findViewById(R.id.backup).setOnClickListener(v->backupPassword());findViewById(R.id.restore).setOnClickListener(v->openBackup());count();}
+ SecretKey localKey()throws Exception{KeyStore k=KeyStore.getInstance("AndroidKeyStore");k.load(null);if(k.containsAlias(ALIAS))return ((KeyStore.SecretKeyEntry)k.getEntry(ALIAS,null)).getSecretKey();KeyGenerator g=KeyGenerator.getInstance("AES","AndroidKeyStore");g.init(new KeyGenParameterSpec.Builder(ALIAS,KeyProperties.PURPOSE_ENCRYPT|KeyProperties.PURPOSE_DECRYPT).setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build());return g.generateKey();}
+ byte[] encLocal(String s)throws Exception{Cipher c=Cipher.getInstance("AES/GCM/NoPadding");c.init(Cipher.ENCRYPT_MODE,localKey());byte[] iv=c.getIV(),d=c.doFinal(s.getBytes(StandardCharsets.UTF_8));byte[] p=new byte[iv.length+d.length];System.arraycopy(iv,0,p,0,iv.length);System.arraycopy(d,0,p,iv.length,d.length);return p;}
+ String decLocal(byte[] p)throws Exception{if(p.length<13)throw new Exception();Cipher c=Cipher.getInstance("AES/GCM/NoPadding");c.init(Cipher.DECRYPT_MODE,localKey(),new GCMParameterSpec(128,p,0,12));return new String(c.doFinal(p,12,p.length-12),StandardCharsets.UTF_8);}
+ JSONArray toJson()throws Exception{JSONArray a=new JSONArray();for(Note n:notes){JSONObject o=new JSONObject();o.put("title",n.title);o.put("body",n.body);a.put(o);}return a;}
+ void fromJson(JSONArray a){notes.clear();for(int i=0;i<a.length();i++){JSONObject o=a.optJSONObject(i);if(o!=null)notes.add(new Note(o.optString("title"),o.optString("body")));}}
+ void saveLocal(){try{prefs.edit().putString(DATA,Base64.encodeToString(encLocal(toJson().toString()),Base64.NO_WRAP)).apply();}catch(Exception e){toast("Secure save failed");}}
+ void loadLocal(){String x=prefs.getString(DATA,"");if(x.isEmpty())return;try{fromJson(new JSONArray(decLocal(Base64.decode(x,Base64.NO_WRAP))));}catch(Exception e){toast("Could not decrypt local notes");}}
+ void edit(Note old){LinearLayout box=new LinearLayout(this);box.setOrientation(LinearLayout.VERTICAL);box.setPadding(24,4,24,4);EditText t=new EditText(this);t.setHint("Title");EditText b=new EditText(this);b.setHint("Write your note...");b.setMinLines(6);box.addView(t);box.addView(b);if(old!=null){t.setText(old.title);b.setText(old.body);}new AlertDialog.Builder(this).setTitle(old==null?"New note":"Edit note").setView(box).setPositiveButton("Save",(d,w)->{if(old==null)notes.add(new Note(t.getText().toString(),b.getText().toString()));else{old.title=t.getText().toString();old.body=b.getText().toString();}saveLocal();adapter.filter("");count();}).setNegativeButton("Cancel",null).show();}
+ void delete(Note n){new AlertDialog.Builder(this).setTitle("Delete note?").setMessage(n.title).setPositiveButton("Delete",(d,w)->{notes.remove(n);saveLocal();adapter.filter("");count();}).setNegativeButton("Cancel",null).show();}
+ void backupPassword(){EditText p=new EditText(this);p.setHint("Backup password (8+ chars)");p.setInputType(0x81);new AlertDialog.Builder(this).setTitle("Encrypted backup").setMessage("Use this password to restore on another phone.").setView(p).setPositiveButton("Continue",(d,w)->{if(p.getText().length()<8){toast("Use at least 8 characters");return;}createBackup(p.getText().toString());}).setNegativeButton("Cancel",null).show();}
+ SecretKey passKey(String p,byte[] salt)throws Exception{PBEKeySpec s=new PBEKeySpec(p.toCharArray(),salt,210000,256);byte[] k=SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(s).getEncoded();s.clearPassword();return new SecretKeySpec(k,"AES");}
+ void createBackup(String password){try{JSONObject plain=new JSONObject();plain.put("format","MYNOTES-1");plain.put("notes",toJson());byte[] salt=new byte[16],iv=new byte[12];SecureRandom r=new SecureRandom();r.nextBytes(salt);r.nextBytes(iv);Cipher c=Cipher.getInstance("AES/GCM/NoPadding");c.init(Cipher.ENCRYPT_MODE,passKey(password,salt),new GCMParameterSpec(128,iv));byte[] data=c.doFinal(plain.toString().getBytes(StandardCharsets.UTF_8));JSONObject f=new JSONObject();f.put("format","MYNOTES-BACKUP-1");f.put("kdf","PBKDF2WithHmacSHA256");f.put("iterations",210000);f.put("salt",Base64.encodeToString(salt,Base64.NO_WRAP));f.put("iv",Base64.encodeToString(iv,Base64.NO_WRAP));f.put("data",Base64.encodeToString(data,Base64.NO_WRAP));pendingBackup=f.toString();Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);i.setType("application/octet-stream");i.putExtra(Intent.EXTRA_TITLE,"MyNotes-Backup.mynotes");startActivityForResult(i,CREATE);}catch(Exception e){toast("Backup failed");}}
+ void openBackup(){Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);i.setType("*/*");i.addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(i,OPEN);}
+ protected void onActivityResult(int r,int result,Intent d){super.onActivityResult(r,result,d);if(result!=RESULT_OK||d==null)return;Uri u=d.getData();try{if(r==CREATE){OutputStream o=getContentResolver().openOutputStream(u);o.write(pendingBackup.getBytes(StandardCharsets.UTF_8));o.close();pendingBackup=null;toast("Encrypted backup saved");}else if(r==OPEN){InputStream in=getContentResolver().openInputStream(u);ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1)out.write(b,0,n);in.close();pendingBackup=out.toString(StandardCharsets.UTF_8.name());restorePassword();}}catch(Exception e){toast("File operation failed");}}
+ void restorePassword(){EditText p=new EditText(this);p.setHint("Backup password");p.setInputType(0x81);new AlertDialog.Builder(this).setTitle("Restore backup").setView(p).setPositiveButton("Restore",(d,w)->restore(p.getText().toString())).setNegativeButton("Cancel",null).show();}
+ void restore(String password){try{JSONObject f=new JSONObject(pendingBackup);if(!"MYNOTES-BACKUP-1".equals(f.optString("format")))throw new Exception();byte[] salt=Base64.decode(f.getString("salt"),Base64.NO_WRAP),iv=Base64.decode(f.getString("iv"),Base64.NO_WRAP),data=Base64.decode(f.getString("data"),Base64.NO_WRAP);Cipher c=Cipher.getInstance("AES/GCM/NoPadding");c.init(Cipher.DECRYPT_MODE,passKey(password,salt),new GCMParameterSpec(128,iv));JSONObject p=new JSONObject(new String(c.doFinal(data),StandardCharsets.UTF_8));JSONArray a=p.getJSONArray("notes");new AlertDialog.Builder(this).setTitle("Replace current notes?").setMessage("This replaces notes on this phone.").setPositiveButton("Restore",(d,w)->{fromJson(a);saveLocal();adapter.filter("");count();toast("Notes restored");}).setNegativeButton("Cancel",null).show();}catch(Exception e){toast("Wrong password or damaged backup");}}
+ void count(){((TextView)findViewById(R.id.count)).setText(notes.size()+" notes");}void toast(String s){Toast.makeText(this,s,Toast.LENGTH_SHORT).show();}
+ class Note{String title,body;Note(String t,String b){title=t;body=b;}}
+ class NoteAdapter extends RecyclerView.Adapter<VH>{ArrayList<Note> shown=new ArrayList<>(notes);void filter(String q){shown.clear();q=q.toLowerCase();for(Note n:notes)if((n.title+" "+n.body).toLowerCase().contains(q))shown.add(n);notifyDataSetChanged();}public VH onCreateViewHolder(ViewGroup p,int t){TextView v=new TextView(MainActivity.this);v.setPadding(18,18,18,18);v.setTextSize(16);return new VH(v);}public void onBindViewHolder(VH h,int i){Note n=shown.get(i);h.t.setText((n.title.isEmpty()?"Untitled":n.title)+"\n"+n.body);h.t.setOnClickListener(v->edit(n));h.t.setOnLongClickListener(v->{delete(n);return true;});}public int getItemCount(){return shown.size();}}
+ class VH extends RecyclerView.ViewHolder{TextView t;VH(View v){super(v);t=(TextView)v;}}
 }
